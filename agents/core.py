@@ -1,5 +1,5 @@
 """
-Provides the base class for all Agents 
+Provides the base class for all Agents
 """
 
 from abc import ABC
@@ -31,7 +31,7 @@ class Agent(ABC):
         model_id is the Model ID for initialization
         """
 
-        self.model_id = model_id 
+        self.model_id = model_id
 
         if model_id == 'code-bison-32k':
             with telemetry.tool_context_manager('opendataqna'):
@@ -40,56 +40,99 @@ class Agent(ABC):
         elif model_id == 'text-bison-32k':
             with telemetry.tool_context_manager('opendataqna'):
                 self.model = TextGenerationModel.from_pretrained('text-bison-32k')
-        
+
         elif model_id == 'codechat-bison-32k':
             with telemetry.tool_context_manager('opendataqna'):
                 self.model = CodeChatModel.from_pretrained("codechat-bison-32k")
-        
+
         elif model_id == 'gemini-1.0-pro':
             with telemetry.tool_context_manager('opendataqna'):
                 # print("Model is gemini 1.0 pro")
                 self.model = GenerativeModel("gemini-1.0-pro-001")
+                # self.safety_settings: Optional[dict] = {
+                # HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                # HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                # HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                # HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                # }
+
                 self.safety_settings: Optional[dict] = {
-                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-            }
-        
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                }
+
         elif model_id == 'gemini-1.5-flash':
             with telemetry.tool_context_manager('opendataqna'):
                 # print("Model is gemini 1.5 flash")
-                self.model = GenerativeModel("gemini-1.5-flash-preview-0514")
+                self.model = GenerativeModel("gemini-1.5-flash-001")
+                # self.safety_settings: Optional[dict] = {
+                # HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                # HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                # HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                # HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                # }
                 self.safety_settings: Optional[dict] = {
-                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-            }
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                }
 
         elif model_id == 'gemini-1.5-pro':
             with telemetry.tool_context_manager('opendataqna'):
                 # print("Model is gemini 1.5 Pro")
                 self.model = GenerativeModel("gemini-1.5-pro-001")
+                # self.safety_settings: Optional[dict] = {
+                # HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                # HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                # HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                # HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                # }
                 self.safety_settings: Optional[dict] = {
-                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-            }
-        
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                }
+
         else:
             raise ValueError("Please specify a compatible model.")
 
     def generate_llm_response(self,prompt):
-        context_query = self.model.generate_content(prompt,safety_settings=self.safety_settings,stream=False)
+        # TODO: determine correct safety settings
+        context_query = self.model.generate_content(prompt, safety_settings=self.safety_settings, stream=False)
         return str(context_query.candidates[0].text).replace("```sql", "").replace("```", "").rstrip("\n")
 
 
     def rewrite_question(self,question,session_history):
-        formatted_history=''
-        concat_questions=''
-        for i, _row in enumerate(session_history,start=1):
+        batch_size = 10
+
+        total_questions = len(session_history)
+
+        if total_questions > 10:
+            start_index = total_questions - batch_size
+            end_index = total_questions
+        else:
+            start_index = 0
+            end_index = total_questions
+
+        current_batch_history = session_history[start_index:end_index]
+
+        # # Print the number of questions in history and their content
+        # print(f"   -----------core Total number of questions provided: {total_questions}")
+        # print(f"   -----------core Start index for history: {start_index}")
+        # print(f"   -----------core End index for history: {end_index}")
+        # print(f"   -----------core Number of questions used for history: {len(current_batch_history)}")
+
+        # print("Questions used for history:")
+        # for i, _row in enumerate(current_batch_history, start=1):
+        #     print(f"Q{i}: {_row['user_question']}")
+
+        formatted_history = ""
+        concat_questions = ""
+        for i, _row in enumerate(current_batch_history, start=1):
             user_question = _row['user_question']
             # print(user_question)
             formatted_history += f"User Question - Turn :: {i} : {user_question}\n"
@@ -114,7 +157,7 @@ class Agent(ABC):
             {question}
         """
         re_written_qe = str(self.generate_llm_response(context_prompt))
-        
+
 
         print("*"*25 +"Re-written question:: "+"*"*25+"\n"+str(re_written_qe))
 

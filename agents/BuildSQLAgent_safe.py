@@ -106,7 +106,6 @@ class BuildSQLAgent(Agent, ABC):
         #     print(f"Entry {i}: {entry}")
 
         chat_history = []
-        history = 'The previous questions and SQL generated in this session are provided below. Use this history as reference if and only if the question asked is a not an independent question and has some dependency on the last 1-2 questions in the history:\n\n'
         for entry in relevant_history:
 
             timestamp = entry["timestamp"]
@@ -119,48 +118,38 @@ class BuildSQLAgent(Agent, ABC):
             bot_message = Content(
                 parts=[Part.from_text(entry["bot_response"])], role="assistant"
             )
-
-            history += f"Question: {user_message.parts[0].text}\n"
-            history += f"SQL: {bot_message.parts[0].text}\n"
-            history += f'Answer: {entry.get("nl_response", "")}\n\n\n'
             chat_history.extend([user_message, bot_message])  # Add both to the history
         logs_dict['SQL Building Time']['connections_history_loading'] = time.time() -connections_start_time
-
-
-        # Print chat history details
+        # # Print chat history details
         # print("Chat History Built:")
         # for i, message in enumerate(chat_history, start=1):
-        #     history += f"Message {i}: {message.parts[0].text}"
-        #     history += '\n\n'
         #     print(f"Message {i}: {message.parts[0].text}")
 
-        # history+='------------------------------------------------'
-
         # print("Chat History Retrieved")
-        # if self.model_id == "codechat-bison-32k":
-        #     with telemetry.tool_context_manager("opendataqna-buildsql-v2"):
+        if self.model_id == "codechat-bison-32k":
+            with telemetry.tool_context_manager("opendataqna-buildsql-v2"):
 
-        #         chat_session = self.model.start_chat(context=context_prompt)
-        # elif "gemini" in self.model_id:
-        #     set_context_start_time = time.time()
-        #     with telemetry.tool_context_manager("opendataqna-buildsql-v2"):
+                chat_session = self.model.start_chat(context=context_prompt)
+        elif "gemini" in self.model_id:
+            set_context_start_time = time.time()
+            with telemetry.tool_context_manager("opendataqna-buildsql-v2"):
 
-        #         # print("SQL Builder Agent : " + str(self.model_id))
-        #         config = GenerationConfig(
-        #             max_output_tokens=max_output_tokens,
-        #             temperature=temperature,
-        #             top_p=top_p,
-        #             top_k=top_k,
-        #         )
-        #         chat_session = self.model.start_chat(
-        #             history=chat_history, response_validation=False
-        #         )
-        #         chat_session.send_message(context_prompt)
-        #     set_context_end_time = time.time()
-        #     logs_dict['SQL Building Time']['context_setting_time_build_sql'] = set_context_end_time-set_context_start_time
+                # print("SQL Builder Agent : " + str(self.model_id))
+                config = GenerationConfig(
+                    max_output_tokens=max_output_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                )
+                chat_session = self.model.start_chat(
+                    history=chat_history, response_validation=False
+                )
+                chat_session.send_message(context_prompt)
+            set_context_end_time = time.time()
+            logs_dict['SQL Building Time']['context_setting_time_build_sql'] = set_context_end_time-set_context_start_time
 
-        # else:
-        #     raise ValueError("Invalid Model Specified")
+        else:
+            raise ValueError("Invalid Model Specified")
         start_time = time.time()
         # if session_history is None or not session_history:
         #     # concated_questions = None
@@ -187,19 +176,16 @@ class BuildSQLAgent(Agent, ABC):
         # Generate SQL for User Question : {user_question}
 
         # """
-        build_context_prompt = f"""Generate SQL for User Question: {user_question}"""
+        build_context_prompt = f"""
+        Generate SQL for User Question : {user_question}
+        """
 
 
         # print("BUILD CONTEXT ::: "+str(build_context_prompt))
 
         with telemetry.tool_context_manager("opendataqna-buildsql-v2"):
 
-            # response = chat_session.send_message(build_context_prompt, stream=False)
-            prompt =  context_prompt + '\n\n' + history + '\n'
-            prompt += '-------------------------------------------------------\n'
-            prompt = prompt + build_context_prompt
-            # print(prompt)
-            response = self.model.generate_content(prompt, safety_settings=self.safety_settings, stream=False)
+            response = chat_session.send_message(build_context_prompt, stream=False)
             generated_sql = (
                 (str(response.text)).replace("```sql", "").replace("```", "")
             )
@@ -208,7 +194,7 @@ class BuildSQLAgent(Agent, ABC):
         end_time = time.time()
         logs_dict['SQL Building Time']['initial_sql_generation_build_sql'] = end_time-start_time
 
-        return generated_sql, prompt, logs_dict
+        return generated_sql, context_prompt, logs_dict
 
     def rewrite_question(self, question, session_history):
 

@@ -1,10 +1,11 @@
-import json 
+import json
+from datetime import datetime
 from abc import ABC
 from .core import Agent
-from utilities import PROMPTS, format_prompt 
+from utilities import PROMPTS, format_prompt
 from vertexai.generative_models import HarmCategory, HarmBlockThreshold
 from google.cloud.aiplatform import telemetry
-import vertexai 
+import vertexai
 from utilities import PROJECT_ID, PG_REGION
 vertexai.init(project=PROJECT_ID, location=PG_REGION)
 
@@ -33,29 +34,41 @@ class ResponseAgent(Agent, ABC):
 
     agentType: str = "ResponseAgent"
 
-    def run(self, user_question, sql_result):
+    def __init__(self,model_id="gemini-1.5-pro"):
+        super().__init__(model_id=model_id)
 
-        context_prompt = PROMPTS['nl_reponse']
+    def run(self, user_question, re_written_qe, generated_sql, sql_result, nl_prompt):
+
+        if nl_prompt:
+            context_prompt = nl_prompt
+        else:
+            context_prompt = PROMPTS['nl_response']
 
 
-
+        current_date = datetime.now().strftime("%Y-%m-%d")
         context_prompt = format_prompt(context_prompt,
+                                       current_date = current_date,
                                        user_question = user_question,
-                                       sql_result = sql_result)
-                                       
+                                       re_written_qe = re_written_qe,
+                                       generated_sql = generated_sql,
+                                       sql_result = sql_result,
+                                       )
+
+        print("------------------------------------>", context_prompt)
+
         # print(f"Prompt for Natural Language Response: \n{context_prompt}")
 
 
         if 'gemini' in self.model_id:
             with telemetry.tool_context_manager('opendataqna-response-v2'):
-                context_query = self.model.generate_content(context_prompt,safety_settings=self.safety_settings, stream=False)
+                # TODO: determine correct safety settings
+                context_query = self.model.generate_content(context_prompt, safety_settings=self.safety_settings, stream=False)
                 generated_sql = str(context_query.candidates[0].text)
 
         else:
             with telemetry.tool_context_manager('opendataqna-response-v2'):
                 context_query = self.model.predict(context_prompt, max_output_tokens = 8000, temperature=0)
                 generated_sql = str(context_query.candidates[0])
-        
+
         return generated_sql
 
-    

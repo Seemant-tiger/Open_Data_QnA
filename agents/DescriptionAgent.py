@@ -1,5 +1,5 @@
 from abc import ABC
-from .core import Agent 
+from .core import Agent
 
 
 class DescriptionAgent(Agent, ABC):
@@ -25,12 +25,12 @@ class DescriptionAgent(Agent, ABC):
             Generates missing table and column descriptions using the language model.
 
             Args:
-                source (str): The source of the database schema ("bigquery").  
+                source (str): The source of the database schema ("bigquery").
                 table_desc_df (pd.DataFrame): A DataFrame containing table metadata with potential missing descriptions.
                 column_name_df (pd.DataFrame): A DataFrame containing column metadata with potential missing descriptions.
 
             Returns:
-                Tuple[pd.DataFrame, pd.DataFrame]: 
+                Tuple[pd.DataFrame, pd.DataFrame]:
                     - The updated `table_desc_df` with generated table descriptions.
                     - The updated `column_name_df` with generated column descriptions.
     """
@@ -39,6 +39,7 @@ class DescriptionAgent(Agent, ABC):
     agentType: str = "DescriptionAgent"
 
     def generate_llm_response(self,prompt):
+        # TODO: determine correct safety settings
         context_query = self.model.generate_content(prompt,safety_settings=self.safety_settings,stream=False)
         return str(context_query.candidates[0].text).replace("```sql", "").replace("```", "")
 
@@ -56,7 +57,7 @@ class DescriptionAgent(Agent, ABC):
                         Parameters:
                         - column metadata: {column_name_df.query(q).to_markdown(index = False)}
                         - table metadata: {table_desc_df.query(q).to_markdown(index = False)}
-                        
+
                         DO NOT generate description that is more than two lines
                     """
                 else:
@@ -112,6 +113,6 @@ class DescriptionAgent(Agent, ABC):
                 column_name_df.at[index,'column_description']=self.generate_llm_response(prompt=context_prompt)
                 print(f"Generated column description for {row['table_schema']}.{row['table_name']}.{row['column_name']}")
                 llm_generated=llm_generated+1
-                
+
         print("LLM generated "+ str(llm_generated) + " Column Descriptions")
         return table_desc_df,column_name_df

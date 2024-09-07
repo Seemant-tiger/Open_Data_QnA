@@ -1,15 +1,17 @@
 from abc import ABC
+import time
+from datetime import datetime
 
-import vertexai
 from vertexai.language_models import CodeChatModel
 from vertexai.generative_models import GenerativeModel,GenerationConfig
-from google.cloud.aiplatform import telemetry
-from dbconnectors import pgconnector, bqconnector
-from utilities import PROMPTS, format_prompt
+
 from .core import Agent
 import pandas as pd
-import json  
-
+import json
+from dbconnectors import pgconnector, bqconnector
+from utilities import PROMPTS, format_prompt
+from google.cloud.aiplatform import telemetry
+import vertexai
 from utilities import PROJECT_ID, PG_REGION
 vertexai.init(project=PROJECT_ID, location=PG_REGION)
 
@@ -24,7 +26,7 @@ class DebugSQLAgent(Agent, ABC):
         agentType (str): Indicates the type of agent, fixed as "DebugSQLAgent".
         model_id (str): The ID of the chat model to use for debugging. Valid options are:
             - "codechat-bison-32k"
-            - "gemini-1.0-pro" 
+            - "gemini-1.0-pro"
             - "gemini-ultra"
 
     Methods:
@@ -76,7 +78,7 @@ class DebugSQLAgent(Agent, ABC):
     agentType: str = "DebugSQLAgent"
 
     def __init__(self, model_id = 'gemini-1.5-pro'):
-        super().__init__(model_id=model_id) 
+        super().__init__(model_id=model_id)
 
 
     def init_chat(self,source_type,user_grouping, tables_schema,columns_schema,similar_sql="-No examples provided..-"):
@@ -85,17 +87,20 @@ class DebugSQLAgent(Agent, ABC):
             usecase_context = PROMPTS[f'usecase_{source_type}_{user_grouping}']
         else:
             usecase_context = "No extra context for the usecase is provided"
-            
-        context_prompt = PROMPTS[f'debugsql_{source_type}']
 
+        context_prompt = PROMPTS[f'debugsql_{source_type}']
+        # Get the current date
+        current_date = datetime.now().strftime("%Y-%m-%d")
         context_prompt = format_prompt(context_prompt,
+                                       current_date = current_date,
                                        usecase_context = usecase_context,
-                                       similar_sql=similar_sql, 
-                                       tables_schema=tables_schema, 
-                                       columns_schema = columns_schema)
+                                       similar_sql=similar_sql,
+                                       tables_schema=tables_schema,
+                                       columns_schema = columns_schema,
+                                       )
 
         # print(f"Prompt to Debug SQL after formatting: \n{context_prompt}")
-        
+
         if self.model_id == 'codechat-bison-32k':
             with telemetry.tool_context_manager('opendataqna-debugsql-v2'):
 
@@ -107,7 +112,7 @@ class DebugSQLAgent(Agent, ABC):
                 chat_session.send_message(context_prompt)
         else:
             raise ValueError('Invalid Chat Model Specified')
-        
+
         return chat_session
 
 
@@ -152,69 +157,125 @@ class DebugSQLAgent(Agent, ABC):
                         source_type,
                         user_grouping,
                         query,
-                        user_question, 
+                        user_question,
                         SQLChecker,
-                        tables_schema, 
+                        tables_schema,
                         columns_schema,
-                        AUDIT_TEXT, 
-                        similar_sql="-No examples provided..-", 
+                        AUDIT_TEXT,
+                        similar_sql="-No examples provided..-",
                         DEBUGGING_ROUNDS = 2,
-                        LLM_VALIDATION=False):
-        i = 0  
-        STOP = False 
-        invalid_response = False 
-        chat_session = self.init_chat(source_type,user_grouping,tables_schema,columns_schema,similar_sql)
+                        LLM_VALIDATION=False,
+                        logs_dict = {}):
+        time1 =time.time()
+        i = 0
+        STOP = False
+        invalid_response = False
+        
         sql = query.replace("```sql","").replace("```","").replace("EXPLAIN ANALYZE ","")
 
+        if source_type == "bigquery":
+            connector = bqconnector
+        else:
+            connector = pgconnector
+        correct_sql, exec_result_df = connector.test_sql_plan_execution(sql)
+        if correct_sql:
+            STOP = True
+            logs_dict['SQL Building Time']['chat_initialization_debugger'] = time.time()-time1
+            return sql, False, 'No dubugger required',logs_dict
+        
+        chat_session = self.init_chat(source_type,user_grouping,tables_schema,columns_schema,similar_sql)
+        time2 =time.time()
+        logs_dict['SQL Building Time']['chat_initialization_debugger'] = time.time()-time1
         AUDIT_TEXT=AUDIT_TEXT+"\n\nEntering the debugging steps!"
         while (not STOP):
+            if "debugging_count" not in logs_dict['SQL Building Time']:
+                logs_dict['SQL Building Time']['debugging_count'] = 1
+            else:
+                logs_dict['SQL Building Time']['debugging_count'] += 1
 
             json_syntax_result={ "valid":True, "errors":"None"}
-            # Check if LLM Validation is enabled 
-            if LLM_VALIDATION: 
+            # Check if LLM Validation is enabled
+            if LLM_VALIDATION:
+                start_time_llm_val = time.time()
                 # sql = query.replace("```sql","").replace("```","").replace("EXPLAIN ANALYZE ","")
-                json_syntax_result = SQLChecker.check(source_type,user_question,tables_schema,columns_schema, sql) 
+                json_syntax_result = SQLChecker.check(source_type,user_question,tables_schema,columns_schema, sql)
+                end_time_llm_val = time.time()
+                if 'LLM Validation' not in logs_dict['SQL Building Time']:
+                    logs_dict['SQL Building Time']['LLM Validation'] = [start_time_llm_val-end_time_llm_val]
+                else:
+                    logs_dict['SQL Building Time']['LLM Validation']= logs_dict['SQL Building Time']['LLM Validation']+ [start_time_llm_val-end_time_llm_val]
 
-            else: 
+
+            else:
                 json_syntax_result['valid'] = True
                 AUDIT_TEXT=AUDIT_TEXT+"\nLLM Validation is deactivated. Jumping directly to dry run execution."
- 
+
 
             if json_syntax_result['valid'] is True:
+                debugging_start_time = time.time()
                 AUDIT_TEXT=AUDIT_TEXT+"\nGenerated SQL is syntactically correct as per LLM Validation!"
-                   
+
                 # print(AUDIT_TEXT)
                 if source_type=='bigquery':
                     connector=bqconnector
                 else:
                     connector=pgconnector
-                    
+
+
                 correct_sql, exec_result_df = connector.test_sql_plan_execution(sql)
-                
+                debugging_end_time = time.time()
+                if 'debugging Time' not in logs_dict['SQL Building Time']:
+                    logs_dict['SQL Building Time']['debugging Time'] = [debugging_end_time-debugging_start_time]
+                else:
+                    logs_dict['SQL Building Time']['debugging Time']= logs_dict['SQL Building Time']['debugging Time']+[debugging_end_time-debugging_start_time]
+
                 if not correct_sql:
+                        rewrite_sql_start_time = time.time()
                         AUDIT_TEXT=AUDIT_TEXT+"\nGenerated SQL failed on execution! Here is the feedback from bigquery dryrun/ explain plan:  \n" + str(exec_result_df)
+
                         rewrite_result = self.rewrite_sql_chat(chat_session, sql, user_question, exec_result_df)
+
+
                         print('\n Rewritten and Cleaned SQL: ' + str(rewrite_result))
                         AUDIT_TEXT=AUDIT_TEXT+"\nRewritten and Cleaned SQL: \n' + str({rewrite_result})"
                         sql = str(rewrite_result).replace("```sql","").replace("```","").replace("EXPLAIN ANALYZE ","")
+                        rewrite_sql_end_time = time.time()
+                        if 'SQL Rewriting Time' not in logs_dict['SQL Building Time']:
+                            logs_dict['SQL Building Time']['SQL Rewriting Time'] = [rewrite_sql_end_time-rewrite_sql_start_time]
+                        else:
+                            logs_dict['SQL Building Time']['SQL Rewriting Time']= logs_dict['SQL Building Time']['SQL Rewriting Time']+ [rewrite_sql_end_time-rewrite_sql_start_time]
 
                 else: STOP = True
             else:
+                rewrite_sql_start_time = time.time()
                 print(f'\nGenerated qeury failed on syntax check as per LLM Validation!\nError Message from LLM:  {json_syntax_result} \nRewriting the query...')
                 AUDIT_TEXT=AUDIT_TEXT+'\nGenerated qeury failed on syntax check as per LLM Validation! \nError Message from LLM:  '+ str(json_syntax_result) + '\nRewriting the query...'
-                
+
                 syntax_err_df = pd.read_json(json.dumps(json_syntax_result))
+
                 rewrite_result=self.rewrite_sql_chat(chat_session, sql, user_question, syntax_err_df)
                 print(rewrite_result)
                 AUDIT_TEXT=AUDIT_TEXT+'\n Rewritten SQL: ' + str(rewrite_result)
                 sql=str(rewrite_result).replace("```sql","").replace("```","").replace("EXPLAIN ANALYZE ","")
+                rewrite_sql_end_time = time.time()
+                if 'SQL Rewriting Time' not in logs_dict['SQL Building Time']:
+                    logs_dict['SQL Building Time']['SQL Rewriting Time'] = [rewrite_sql_end_time-rewrite_sql_start_time]
+                else:
+                    logs_dict['SQL Building Time']['SQL Rewriting Time'] = logs_dict['SQL Building Time']['SQL Rewriting Time']+ [rewrite_sql_end_time-rewrite_sql_start_time]
+
+
             i+=1
             if i > DEBUGGING_ROUNDS:
                 AUDIT_TEXT=AUDIT_TEXT+ "Exceeded the number of iterations for correction!"
                 AUDIT_TEXT=AUDIT_TEXT+ "The generated SQL can be invalid!"
                 STOP = True
-                invalid_response=True
-            # After the while is completed
-        if i > DEBUGGING_ROUNDS:
-            invalid_response=True
-        return sql, invalid_response, AUDIT_TEXT
+
+        #         invalid_response=True
+        #     # After the while is completed
+        # if i > DEBUGGING_ROUNDS:
+        #     invalid_response=True
+
+        if 'total_debugging_time' not in logs_dict:
+            logs_dict['total_debugging_time'] = time.time()-time1
+
+        return sql, invalid_response, AUDIT_TEXT, logs_dict
